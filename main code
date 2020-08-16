@@ -1,0 +1,150 @@
+/*
+ * RcPlane Bloody Wonder.c
+ *
+ * Created: 2020-07-14 14:45:18
+ * Author : Andreas Blom
+ */ 
+
+#define F_CPU 8000000UL
+#include <stdint.h>
+#include <avr/io.h>
+#include <util/delay.h>
+#include <stdlib.h>
+#include <avr/interrupt.h>
+#include <stdio.h>
+#include <avr/pgmspace.h>
+#include <util/atomic.h>
+#include <math.h>
+
+#define RX_BUFFER_SIZE    25
+#define BUAD 100000
+#define BRC ((F_CPU/16/BUAD)-1)
+
+int16_t Buffer_loaded = 0;
+int16_t rxReadPos = 0;
+int16_t rxWritePos = 0;
+char _payload[RX_BUFFER_SIZE];
+uint16_t channels[5];
+
+uint8_t Motorcount = 1;
+uint16_t thrustpwm = 1100;
+uint16_t rollangle = 1500;
+uint16_t pitchangle = 1500;
+
+float roll = 990;
+float pitch = 992;
+float thrust = 172;
+
+void initSBUS(void)
+{
+
+	/* Set Baudrate  */
+	UBRR0H = (BRC>>8); // Shift the 16bit value ubrr 8 times to the right and transfer the upper 8 bits to UBBR0H register.
+	UBRR0L = (BRC);    // Copy the 16 bit value ubrr to the 8 bit UBBR0L register,Upper 8 bits are truncated while lower 8 bits are copied
+
+	
+	// init reciever
+	UCSR0C = 0b00101110;       /* Set frame format: 8data, 2stop bit, even parity */
+	UCSR0B = (1 << RXEN0) | (1 << RXCIE0) | (1<<TXEN0) ;   /* Enable  rx, tx  , enable interrupts         */
+}
+
+void initTimer16_servo(void){
+	DDRD = 0b01110000;
+	DDRB |= (1 << PB1)|(1 << PB0);  //PORT B, PB1 used as pwm output
+	
+	TCCR1A = (1 << COM1A1) | (0 << WGM10) | (1 << WGM11);
+	// set non-inverting mode
+
+	TCCR1B = (1 << WGM12) | (1 << WGM13) | (1 << CS11)| (0 << CS10);
+	// set fast PWM Mode , prescalar 8
+	
+	TIMSK1 = (1 << OCIE1B); //allow interrupts
+	
+	ICR1 = 5000;      // (frequency F_cpu * prescalar)/wanted freq = ICR1
+	OCR1A = 1500;               // set duty cycle, 1100-1940 ESC
+	OCR1B = 4900;               // set duty cycle, 550-2400, 0-180 degrees
+}
+
+int main(void)
+{
+	initTimer16_servo();
+	initSBUS();
+	sei();
+	
+    while (1) 
+    {
+		if (Buffer_loaded == 1)   // wait for whole SBUS package
+		{        // 1 channel is 11 bits, save the 11 bit value in a 16 bit memory
+			channels[0]  = (int16_t) ((_payload[1]    |_payload[2] <<8)                     & 0x07FF); // throttle    (högre värde uppåt)       172-1811
+			channels[1]  = (int16_t) ((_payload[2]>>3 |_payload[3] <<5)                     & 0x07FF); // roll      (högre värde till höger)  172-1811, mitt 989-993
+			channels[2]  = (int16_t) ((_payload[3]>>6 |_payload[4] <<2 |_payload[5]<<10)  	& 0x07FF); // pitch     (högre värde uppåt)       172-1811 mitt 990-995
+		//	channels[3]  = (int16_t) ((_payload[5]>>1 |_payload[6] <<7)                     & 0x07FF); // yaw      (högre värde höger)        172-1811 mitt 994-997
+			channels[3]  = (int16_t) ((_payload[6]>>4 |_payload[7] <<4)                     & 0x07FF); // switch   (högre uppåt)              SF switch down = 992, UP = 1811
+			
+			Buffer_loaded = 0;
+		}
+		 roll   = channels[1];
+		 pitch  = channels[2];
+		 thrust = channels[0];
+		
+		 thrustpwm  = (thrust*0.51251+1011.85);
+		 rollangle  = (roll*1.1592 + 300);
+		 pitchangle = (pitch*1.1592 + 300); 
+		
+		OCR1A = 0;
+    }
+}
+
+ISR(USART_RX_vect)
+{
+	_payload[rxWritePos] = UDR0;
+	
+	if (_payload[0] == 0x0F)              //leta efter header
+	{
+		rxWritePos++;
+
+		if (rxWritePos >= RX_BUFFER_SIZE)
+		{
+			rxWritePos = 0;
+			Buffer_loaded = 1;           // Flagga när buffern är lastad
+		}
+	}
+}
+
+ISR(TIMER1_COMPB_vect)
+{
+	switch (Motorcount)
+	{
+		case 1:
+		OCR1A = thrustpwm;			
+		PORTD=0b00010000;                                //thrust
+		break;
+		
+		case 2:
+		OCR1A = rollangle;			
+		PORTD=0b00100000;                                 //roll
+		break;
+		
+		case 3:
+		OCR1A = pitchangle;
+		PORTD=0b01000000;                                  //pitch
+		break;
+		
+		case 4:	
+		PORTD=0b00000000;                                 //empty channel
+		break;
+		
+		
+		default:
+		PORTD=0x00;
+		Motorcount = 0;
+	} //end of switch
+
+	Motorcount++;
+	
+	if(Motorcount>=5)
+ 		{
+ 			Motorcount=1;
+ 		}
+	
+}
