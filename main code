@@ -36,6 +36,7 @@ float throttle = 172;
 
 void initSBUS(void)
 {
+	// initiate UART
 	/* Set Baudrate  */
 	UBRR0H = (BRC>>8); // Shift the 16bit value ubrr 8 times to the right and transfer the upper 8 bits to UBBR0H register.
 	UBRR0L = (BRC);    // Copy the 16 bit value ubrr to the 8 bit UBBR0L register,Upper 8 bits are truncated while lower 8 bits are copied
@@ -59,7 +60,7 @@ void initTimer16_servo(void){
 	
 	ICR1  = 5000;      // (frequency F_cpu * prescalar)/wanted freq = ICR1
 	OCR1A = 1100;               // set duty cycle, 1100-1940 ESC
-	OCR1B = 4900;               // set duty cycle, 550-2400, 0-180 degrees
+	OCR1B = 4900;               // prepare for switch
 }
 
 int main(void)
